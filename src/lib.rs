@@ -1,3 +1,5 @@
+mod admin;
+
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
@@ -27,15 +29,29 @@ impl ArtifactState {
 const DEFAULT_UPDATES_ROOT: &str = "/var/lib/vapor-server/updates";
 
 pub async fn app_router_from_env() -> Result<Router, Box<dyn std::error::Error>> {
+    let routers = routers_from_env().await?;
+    Ok(routers.api.merge(routers.admin))
+}
+
+pub struct ArtifactRouters {
+    pub api: Router,
+    pub admin: Router,
+}
+
+pub async fn routers_from_env() -> Result<ArtifactRouters, Box<dyn std::error::Error>> {
     let root = PathBuf::from(
         env::var("VAPOR_UPDATES_ROOT").unwrap_or_else(|_| DEFAULT_UPDATES_ROOT.to_owned()),
     );
     let state = ArtifactState::new(root).await?;
-    Ok(router(state))
+    Ok(ArtifactRouters {
+        api: api_router(state.clone()),
+        admin: admin::router(state.root.clone()),
+    })
 }
 
-fn router(state: ArtifactState) -> Router {
+fn api_router(state: ArtifactState) -> Router {
     Router::new()
+        .route("/api/updates/healthz", get(|| async { "ok\n" }))
         .route(
             "/api/updates/v1/vapor/{channel}/{platform}/latest.json",
             get(latest_manifest),
