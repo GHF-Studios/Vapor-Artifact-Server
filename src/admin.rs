@@ -409,7 +409,7 @@ fn private_response(status: StatusCode, body: &'static str) -> Response {
     let mut response = (status, body).into_response();
     response.headers_mut().insert(
         CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
+        HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html; charset=utf-8"),
     );
     response
         .headers_mut()
@@ -564,6 +564,10 @@ mod tests {
         let response = page(State(state), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/vnd.vapor.admin-page.v1+html; charset=utf-8"
+        );
+        assert_eq!(
             response.headers().get("cache-control").unwrap(),
             "private, no-store"
         );
@@ -610,7 +614,10 @@ mod tests {
             response.headers().get("content-type").unwrap(),
             "application/vnd.vapor.admin-page.v1+html; charset=utf-8"
         );
-        assert_eq!(response.headers().get("cache-control").unwrap(), "private, no-store");
+        assert_eq!(
+            response.headers().get("cache-control").unwrap(),
+            "private, no-store"
+        );
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.starts_with("<p class=\"eyebrow\">"));
