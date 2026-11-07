@@ -391,7 +391,7 @@ fn render_inventory(items: &[ReleaseSummary]) -> String {
             .collect::<String>()
     };
     format!(
-        "<p class=\"eyebrow\">Artifacts · Release service</p><h1>Vapor releases</h1><p class=\"muted\">Read-only channel inventory · {} rows shown (maximum {})</p><div class=\"card\"><table><thead><tr><th>Channel</th><th>Target</th><th>Version</th><th>Signing key ID</th><th>Signature file</th><th>Bundle state</th><th>Archive bytes</th></tr></thead><tbody>{rows}</tbody></table><p class=\"muted\">Signature presence and manifest metadata are checked; cryptographic signature and archive digest verification are not performed here. Promotion remains an operator release workflow.</p></div>",
+        "<p class=\"eyebrow\">Artifacts · Release service</p><h1>Vapor releases</h1><p class=\"muted\">Read-only channel inventory · {} rows shown (maximum {})</p><div class=\"card\"><div class=\"table-scroll\" role=\"region\" tabindex=\"0\" aria-label=\"Vapor release table\"><table><thead><tr><th>Channel</th><th>Target</th><th>Version</th><th>Signing key ID</th><th>Signature file</th><th>Bundle state</th><th>Archive bytes</th></tr></thead><tbody>{rows}</tbody></table></div><p class=\"muted\">Signature presence and manifest metadata are checked; cryptographic signature and archive digest verification are not performed here. Promotion remains an operator release workflow.</p></div>",
         items.len(), MAX_RELEASES
     )
 }
@@ -629,6 +629,7 @@ mod tests {
         assert!(html.contains("stable"));
         assert!(html.contains("linux-x86_64"));
         assert!(html.contains("incomplete"));
+        assert!(html.contains("aria-label=\"Vapor release table\""));
         assert!(!html.contains("<form"));
         server.abort();
         tokio::fs::remove_dir_all(root).await.unwrap();
