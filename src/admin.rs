@@ -187,7 +187,7 @@ async fn page(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     let mut response = (StatusCode::OK, render_inventory(&items)).into_response();
     response.headers_mut().insert(
         CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
+        HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html; charset=utf-8"),
     );
     response
         .headers_mut()
@@ -391,7 +391,7 @@ fn render_inventory(items: &[ReleaseSummary]) -> String {
             .collect::<String>()
     };
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Artifacts · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Artifacts · Release service</p><h1>Vapor releases</h1><p class=\"muted\">Read-only channel inventory · {} rows shown (maximum {})</p><div class=\"card\"><table><thead><tr><th>Channel</th><th>Target</th><th>Version</th><th>Signing key ID</th><th>Signature file</th><th>Bundle state</th><th>Archive bytes</th></tr></thead><tbody>{rows}</tbody></table><p class=\"muted\">Signature presence and manifest metadata are checked; cryptographic signature and archive digest verification are not performed here. Promotion remains an operator release workflow.</p></div></main></body></html>",
+        "<p class=\"eyebrow\">Artifacts · Release service</p><h1>Vapor releases</h1><p class=\"muted\">Read-only channel inventory · {} rows shown (maximum {})</p><div class=\"card\"><table><thead><tr><th>Channel</th><th>Target</th><th>Version</th><th>Signing key ID</th><th>Signature file</th><th>Bundle state</th><th>Archive bytes</th></tr></thead><tbody>{rows}</tbody></table><p class=\"muted\">Signature presence and manifest metadata are checked; cryptographic signature and archive digest verification are not performed here. Promotion remains an operator release workflow.</p></div>",
         items.len(), MAX_RELEASES
     )
 }
@@ -606,8 +606,19 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/vnd.vapor.admin-page.v1+html; charset=utf-8"
+        );
+        assert_eq!(response.headers().get("cache-control").unwrap(), "private, no-store");
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.starts_with("<p class=\"eyebrow\">"));
+        assert!(!html.contains("<!doctype"));
+        assert!(!html.contains("<html"));
+        assert!(!html.contains("<head"));
+        assert!(!html.contains("<body"));
+        assert!(!html.contains("<main"));
         assert!(html.contains("stable"));
         assert!(html.contains("linux-x86_64"));
         assert!(html.contains("incomplete"));
