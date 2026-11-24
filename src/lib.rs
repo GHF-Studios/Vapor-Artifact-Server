@@ -72,6 +72,14 @@ fn api_router(state: ArtifactState) -> Router {
             "/api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz",
             get(immutable_artifact),
         )
+        .route(
+            "/api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe",
+            get(immutable_windows_setup),
+        )
+        .route(
+            "/api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup",
+            get(immutable_linux_setup),
+        )
         .with_state(state)
 }
 
@@ -169,6 +177,58 @@ async fn immutable_artifact(
         .header(CONTENT_TYPE, "application/gzip")
         .header(CONTENT_LENGTH, metadata.len().to_string())
         .header(CONTENT_DISPOSITION, "attachment; filename=\"vapor.tar.gz\"")
+        .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn immutable_windows_setup(
+    State(state): State<ArtifactState>,
+    Path(version): Path<String>,
+) -> Response {
+    immutable_setup(&state, &version, "windows-x86_64", "vapor-setup.exe").await
+}
+
+async fn immutable_linux_setup(
+    State(state): State<ArtifactState>,
+    Path(version): Path<String>,
+) -> Response {
+    immutable_setup(&state, &version, "linux-x86_64", "vapor-setup").await
+}
+
+async fn immutable_setup(
+    state: &ArtifactState,
+    version: &str,
+    platform: &str,
+    file_name: &str,
+) -> Response {
+    if !valid_segment(version) {
+        return not_found();
+    }
+    let path = state
+        .root
+        .join("releases")
+        .join(version)
+        .join(platform)
+        .join(file_name);
+    let Ok(path) = existing_file_under_root(&state.root, &path).await else {
+        return not_found();
+    };
+    let Ok(file) = fs::File::open(path).await else {
+        return not_found();
+    };
+    let Ok(metadata) = file.metadata().await else {
+        return not_found();
+    };
+    if metadata.len() == 0 || metadata.len() > 512 * 1024 * 1024 {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "invalid setup artifact\n").into_response();
+    }
+    let stream = ReaderStream::new(BufReader::new(file));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(CONTENT_LENGTH, metadata.len().to_string())
+        .header(CONTENT_DISPOSITION, format!("attachment; filename=\"{file_name}\""))
         .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
         .body(Body::from_stream(stream))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
