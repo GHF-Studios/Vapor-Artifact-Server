@@ -502,6 +502,32 @@ fn valid_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'+'))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::stable_version_key;
+
+    #[test]
+    fn stable_history_accepts_the_pinned_pre_alpha_track() {
+        assert!(stable_version_key("0.5.0-pre-alpha-0.1.0").is_some());
+        assert!(stable_version_key("0.5.0-pre-alpha-1.2.1").is_some());
+        assert!(stable_version_key("0.5.0").is_some());
+    }
+
+    #[test]
+    fn stable_history_orders_inner_semver_numerically() {
+        assert!(stable_version_key("0.5.0-pre-alpha-0.1.10") > stable_version_key("0.5.0-pre-alpha-0.1.9"));
+        assert!(stable_version_key("0.5.0-pre-alpha-0.2.0") > stable_version_key("0.5.0-pre-alpha-0.1.99"));
+        assert!(stable_version_key("0.5.0") > stable_version_key("0.5.0-pre-alpha-99.99.99"));
+    }
+
+    #[test]
+    fn stable_history_rejects_unpinned_prerelease_tracks() {
+        assert!(stable_version_key("0.6.0-0.1.0").is_none());
+        assert!(stable_version_key("0.5.0-alpha.1").is_none());
+        assert!(stable_version_key("0.5.0-0.1.0").is_none());
+    }
+}
+
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "release not found\n").into_response()
 }
