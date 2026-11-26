@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use semver::Version;
 use std::env;
 use std::path::{Path as FsPath, PathBuf};
 use tokio::fs;
@@ -249,43 +250,24 @@ fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn stable_version_key(version: &str) -> Option<(u64, u64, u64)> {
+fn stable_version_key(version: &str) -> Option<(Version, bool, Option<Version>)> {
     if !valid_segment(version) {
         return None;
     }
-    let (core, build) = match version.split_once('+') {
-        Some((core, build)) => (core, Some(build)),
-        None => (version, None),
-    };
-    if core.contains('-') || build.is_some_and(|build| !valid_semver_identifiers(build)) {
+    if let Some(inner) = version.strip_prefix("0.5.0-pre-alpha-") {
+        let inner = Version::parse(inner).ok()?;
+        if !inner.pre.is_empty() || !inner.build.is_empty() {
+            return None;
+        }
+        return Some((Version::parse("0.5.0").ok()?, false, Some(inner)));
+    }
+    let stable = Version::parse(version).ok()?;
+    if !stable.pre.is_empty() {
         return None;
     }
-    let mut parts = core.split('.');
-    let major = stable_version_number(parts.next()?)?;
-    let minor = stable_version_number(parts.next()?)?;
-    let patch = stable_version_number(parts.next()?)?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((major, minor, patch))
+    Some((stable, true, None))
 }
 
-fn stable_version_number(value: &str) -> Option<u64> {
-    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
-        return None;
-    }
-    value.parse().ok()
-}
-
-fn valid_semver_identifiers(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('.').all(|identifier| {
-            !identifier.is_empty()
-                && identifier
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-}
 
 async fn immutable_manifest(
     State(state): State<ArtifactState>,
