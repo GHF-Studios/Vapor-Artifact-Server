@@ -28,6 +28,7 @@ impl ArtifactState {
 }
 
 const DEFAULT_UPDATES_ROOT: &str = "/var/lib/vapor-server/updates";
+const PUBLIC_RELEASE_ORIGIN: &str = "https://vapor.ghf-studios.site";
 
 pub async fn app_router_from_env() -> Result<Router, Box<dyn std::error::Error>> {
     let routers = routers_from_env().await?;
@@ -76,6 +77,18 @@ fn api_router(state: ArtifactState) -> Router {
         .route(
             "/api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz",
             get(immutable_artifact),
+        )
+        .route(
+            "/api/updates/v1/vapor/releases/{version}/{platform}/git.tar.gz",
+            get(immutable_git_artifact),
+        )
+        .route(
+            "/api/updates/v1/vapor/releases/{version}/{platform}/git-source.tar.gz",
+            get(immutable_git_source),
+        )
+        .route(
+            "/api/updates/v1/vapor/releases/{version}/{platform}/git-notices.tar.gz",
+            get(immutable_git_notices),
         )
         .route(
             "/api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe",
@@ -217,7 +230,8 @@ async fn complete_stable_release(state: &ArtifactState, version: &str, platform:
     let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&manifest_bytes) else {
         return false;
     };
-    if manifest.get("schema").and_then(serde_json::Value::as_u64) != Some(1)
+    let schema = manifest.get("schema").and_then(serde_json::Value::as_u64);
+    if !matches!(schema, Some(1 | 2))
         || manifest.get("version").and_then(serde_json::Value::as_str) != Some(version)
         || manifest.get("channel").and_then(serde_json::Value::as_str) != Some("stable")
         || manifest.get("platform").and_then(serde_json::Value::as_str) != Some(platform)
@@ -226,7 +240,9 @@ async fn complete_stable_release(state: &ArtifactState, version: &str, platform:
     }
     let artifact = manifest.get("artifact");
     let setup = manifest.get("setup");
-    let expected_base = format!("/api/updates/v1/vapor/releases/{version}/{platform}");
+    let expected_base = format!(
+        "{PUBLIC_RELEASE_ORIGIN}/api/updates/v1/vapor/releases/{version}/{platform}"
+    );
     let artifact_valid = artifact.is_some_and(|artifact| {
         artifact.get("url").and_then(serde_json::Value::as_str)
             == Some(format!("{expected_base}/vapor.tar.gz").as_str())
@@ -243,7 +259,96 @@ async fn complete_stable_release(state: &ArtifactState, version: &str, platform:
             && setup.get("sha256").and_then(serde_json::Value::as_str)
                 .is_some_and(valid_sha256)
     });
-    artifact_valid && setup_valid
+    if !artifact_valid || !setup_valid {
+        return false;
+    }
+    match schema {
+        Some(1) => manifest.get("managed_git").is_none(),
+        Some(2) => {
+            let Some(git) = manifest.get("managed_git") else {
+                return false;
+            };
+            if git.get("platform").and_then(serde_json::Value::as_str) != Some(platform)
+                || git
+                    .get("version")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| Version::parse(value).ok())
+                    .is_none_or(|version| !version.pre.is_empty() || !version.build.is_empty())
+            {
+                return false;
+            }
+            managed_git_asset_valid(
+                state,
+                &release_root,
+                version,
+                platform,
+                git,
+                "artifact",
+                "git.tar.gz",
+                2 * 1024 * 1024 * 1024,
+            )
+            .await
+                && managed_git_asset_valid(
+                    state,
+                    &release_root,
+                    version,
+                    platform,
+                    git,
+                    "source",
+                    "git-source.tar.gz",
+                    8 * 1024 * 1024 * 1024,
+                )
+                .await
+                && managed_git_asset_valid(
+                    state,
+                    &release_root,
+                    version,
+                    platform,
+                    git,
+                    "notices",
+                    "git-notices.tar.gz",
+                    64 * 1024 * 1024,
+                )
+                .await
+        }
+        _ => false,
+    }
+}
+
+async fn managed_git_asset_valid(
+    state: &ArtifactState,
+    release_root: &FsPath,
+    version: &str,
+    platform: &str,
+    managed_git: &serde_json::Value,
+    field: &str,
+    file_name: &str,
+    maximum_size: u64,
+) -> bool {
+    let expected_url = format!(
+        "{PUBLIC_RELEASE_ORIGIN}/api/updates/v1/vapor/releases/{version}/{platform}/{file_name}"
+    );
+    let Some(record) = managed_git.get(field) else {
+        return false;
+    };
+    if record.get("url").and_then(serde_json::Value::as_str) != Some(expected_url.as_str())
+        || !record
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(valid_sha256)
+    {
+        return false;
+    }
+    let path = release_root.join(file_name);
+    let Ok(path) = existing_file_under_root(&state.root, &path).await else {
+        return false;
+    };
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    metadata.len() > 0
+        && metadata.len() <= maximum_size
+        && record.get("size").and_then(serde_json::Value::as_u64) == Some(metadata.len())
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -327,6 +432,76 @@ async fn immutable_artifact(
         .header(CONTENT_TYPE, "application/gzip")
         .header(CONTENT_LENGTH, metadata.len().to_string())
         .header(CONTENT_DISPOSITION, "attachment; filename=\"vapor.tar.gz\"")
+        .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn immutable_git_artifact(
+    State(state): State<ArtifactState>,
+    Path((version, platform)): Path<(String, String)>,
+) -> Response {
+    immutable_managed_git_file(&state, &version, &platform, "git.tar.gz", 2 * 1024 * 1024 * 1024).await
+}
+
+async fn immutable_git_source(
+    State(state): State<ArtifactState>,
+    Path((version, platform)): Path<(String, String)>,
+) -> Response {
+    immutable_managed_git_file(&state, &version, &platform, "git-source.tar.gz", 8 * 1024 * 1024 * 1024).await
+}
+
+async fn immutable_git_notices(
+    State(state): State<ArtifactState>,
+    Path((version, platform)): Path<(String, String)>,
+) -> Response {
+    immutable_managed_git_file(
+        &state,
+        &version,
+        &platform,
+        "git-notices.tar.gz",
+        64 * 1024 * 1024,
+    )
+    .await
+}
+
+async fn immutable_managed_git_file(
+    state: &ArtifactState,
+    version: &str,
+    platform: &str,
+    file_name: &str,
+    maximum_size: u64,
+) -> Response {
+    if !valid_segment(version) || !matches!(platform, "windows-x86_64" | "linux-x86_64") {
+        return not_found();
+    }
+    let path = state
+        .root
+        .join("releases")
+        .join(version)
+        .join(platform)
+        .join(file_name);
+    let Ok(path) = existing_file_under_root(&state.root, &path).await else {
+        return not_found();
+    };
+    let Ok(file) = fs::File::open(path).await else {
+        return not_found();
+    };
+    let Ok(metadata) = file.metadata().await else {
+        return not_found();
+    };
+    if metadata.len() == 0 || metadata.len() > maximum_size {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "invalid managed Git asset\n").into_response();
+    }
+    let stream = ReaderStream::new(BufReader::new(file));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/gzip")
+        .header(CONTENT_LENGTH, metadata.len().to_string())
+        .header(
+            CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        )
         .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
         .body(Body::from_stream(stream))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
@@ -476,6 +651,10 @@ async fn latest_version(state: &ArtifactState, channel: &str, platform: &str) ->
         if metadata.len() > limit {
             return None;
         }
+    }
+
+    if channel == "stable" && !complete_stable_release(state, version, platform).await {
+        return None;
     }
 
     Some(version.to_string())
