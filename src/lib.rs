@@ -335,7 +335,7 @@ async fn managed_git_asset_valid(
         || !record
             .get("sha256")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(valid_sha256)
+            .is_some_and(valid_lowercase_sha256)
     {
         return false;
     }
@@ -353,6 +353,13 @@ async fn managed_git_asset_valid(
 
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn stable_version_key(version: &str) -> Option<(Version, bool, Option<Version>)> {
